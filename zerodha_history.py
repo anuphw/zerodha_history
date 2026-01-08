@@ -2123,15 +2123,33 @@ def convert_md_to_html(md_content, title="Zerodha Account History"):
         {html_body}
     </div>
     <script>
-        // Highlight positive/negative percentages
+        // Highlight positive/negative values (percentages and currency)
         document.querySelectorAll('td').forEach(td => {{
-            const text = td.textContent;
-            if (text.match(/^\\+[\\d.]+%/) || text.match(/^\\*\\*\\+[\\d.]+%/)) {{
+            const text = td.textContent.trim();
+
+            // Check for positive values: +X%, +₹X, ₹X (positive currency)
+            const isPositive = text.match(/^\\+/) ||
+                              (text.match(/^₹[\\d,]+/) && !text.includes('-'));
+
+            // Check for negative values: -X%, -₹X
+            const isNegative = text.match(/^-/) || text.match(/^-₹/);
+
+            if (isPositive && !isNegative) {{
                 td.style.color = '#28a745';
                 td.style.fontWeight = '600';
-            }} else if (text.match(/^-[\\d.]+%/) || text.match(/^\\*\\*-[\\d.]+%/)) {{
+            }} else if (isNegative) {{
                 td.style.color = '#dc3545';
                 td.style.fontWeight = '600';
+            }}
+        }});
+
+        // Also highlight strong/bold elements containing values
+        document.querySelectorAll('strong').forEach(el => {{
+            const text = el.textContent.trim();
+            if (text.match(/^\\+/) || (text.match(/^₹/) && !text.includes('-'))) {{
+                el.style.color = '#28a745';
+            }} else if (text.match(/^-/)) {{
+                el.style.color = '#dc3545';
             }}
         }});
     </script>
