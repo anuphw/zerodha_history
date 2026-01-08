@@ -846,68 +846,124 @@ def calculate_win_rate(portfolio_df, years=None):
 def calculate_all_metrics(portfolio_df, benchmarks_data, time_periods=[1, 3, 5, 7, 10]):
     """Calculate all financial metrics for multiple time periods.
 
+    Only calculates for periods where account has enough history.
+    Includes "All Time" period automatically.
+
     Returns a nested dict: {period: {metric: value}}
     """
     results = {}
 
+    if portfolio_df.empty:
+        return results
+
     # Use Nifty 50 as primary benchmark
     primary_benchmark = benchmarks_data.get("Nifty 50")
 
-    for years in time_periods:
+    # Calculate account age in years
+    start_date = portfolio_df.index.min()
+    end_date = portfolio_df.index.max()
+    account_age_days = (end_date - start_date).days
+    account_age_years = account_age_days / 365.25
+
+    # Filter time periods to only those shorter than account age
+    # and add "All Time" at the end
+    valid_periods = [y for y in time_periods if y <= account_age_years]
+
+    # Process each valid period
+    for years in valid_periods:
         period_key = f"{years}Y"
-        results[period_key] = {}
-
-        # Check if we have enough data for this period
-        if portfolio_df.empty:
-            continue
-
-        end_date = portfolio_df.index.max()
-        start_date = end_date - pd.DateOffset(years=years)
-        period_data = portfolio_df[portfolio_df.index >= start_date]
-
-        if len(period_data) < 30:
-            results[period_key]['data_available'] = False
-            continue
-
-        results[period_key]['data_available'] = True
-
-        # Portfolio return
-        port_return, _, _ = calculate_returns_for_period(portfolio_df, None, years)
-        results[period_key]['portfolio_return'] = port_return
-
-        # Benchmark returns
-        results[period_key]['benchmark_returns'] = {}
-        for bench_name, bench_series in benchmarks_data.items():
-            _, bench_return, _ = calculate_returns_for_period(portfolio_df, bench_series, years)
-            results[period_key]['benchmark_returns'][bench_name] = bench_return
-
-        # Alpha and Beta (vs Nifty 50)
-        alpha, beta, r_squared = calculate_alpha_beta(portfolio_df, primary_benchmark, years)
-        results[period_key]['alpha'] = alpha
-        results[period_key]['beta'] = beta
-        results[period_key]['r_squared'] = r_squared
-
-        # Risk metrics
-        results[period_key]['sharpe_ratio'] = calculate_sharpe_ratio(portfolio_df, years)
-        results[period_key]['sortino_ratio'] = calculate_sortino_ratio(portfolio_df, years)
-        results[period_key]['volatility'] = calculate_volatility(portfolio_df, years)
-        results[period_key]['calmar_ratio'] = calculate_calmar_ratio(portfolio_df, years)
-
-        # Drawdown
-        max_dd, peak_date, trough_date = calculate_max_drawdown(portfolio_df, years)
-        results[period_key]['max_drawdown'] = max_dd
-        results[period_key]['max_dd_peak'] = peak_date
-        results[period_key]['max_dd_trough'] = trough_date
-
-        # Information Ratio (vs Nifty 50)
-        results[period_key]['information_ratio'] = calculate_information_ratio(
-            portfolio_df, primary_benchmark, years
+        results[period_key] = _calculate_metrics_for_period(
+            portfolio_df, benchmarks_data, primary_benchmark, years
         )
 
-        # Win rate
-        results[period_key]['win_rate'] = calculate_win_rate(portfolio_df, years)
+    # Always add "All Time" metrics
+    results['All'] = _calculate_metrics_for_period(
+        portfolio_df, benchmarks_data, primary_benchmark, None  # None = all time
+    )
+    results['All']['account_age_years'] = account_age_years
+    results['All']['account_age_days'] = account_age_days
 
     return results
+
+
+def _calculate_metrics_for_period(portfolio_df, benchmarks_data, primary_benchmark, years):
+    """Calculate all metrics for a single time period.
+
+    years=None means all time.
+    """
+    result = {}
+
+    if portfolio_df.empty:
+        result['data_available'] = False
+        return result
+
+    end_date = portfolio_df.index.max()
+    if years:
+        start_date = end_date - pd.DateOffset(years=years)
+        period_data = portfolio_df[portfolio_df.index >= start_date]
+    else:
+        period_data = portfolio_df
+        start_date = portfolio_df.index.min()
+
+    if len(period_data) < 30:
+        result['data_available'] = False
+        return result
+
+    result['data_available'] = True
+
+    # Portfolio return
+    port_return, _, _ = calculate_returns_for_period(portfolio_df, None, years) if years else (None, None, 0)
+    if years is None:
+        # Calculate all-time return
+        port_return = (1 + period_data['daily_return']).prod() - 1
+    result['portfolio_return'] = port_return
+
+    # Benchmark returns
+    result['benchmark_returns'] = {}
+    for bench_name, bench_series in benchmarks_data.items():
+        if years:
+            _, bench_return, _ = calculate_returns_for_period(portfolio_df, bench_series, years)
+        else:
+            # All time benchmark return
+            if bench_series is not None and not bench_series.empty:
+                common_start = max(start_date, bench_series.index.min())
+                common_end = min(end_date, bench_series.index.max())
+                bench_period = bench_series[(bench_series.index >= common_start) & (bench_series.index <= common_end)]
+                if len(bench_period) >= 2:
+                    bench_return = (bench_period.iloc[-1] / bench_period.iloc[0]) - 1
+                else:
+                    bench_return = None
+            else:
+                bench_return = None
+        result['benchmark_returns'][bench_name] = bench_return
+
+    # Alpha and Beta (vs Nifty 50)
+    alpha, beta, r_squared = calculate_alpha_beta(portfolio_df, primary_benchmark, years)
+    result['alpha'] = alpha
+    result['beta'] = beta
+    result['r_squared'] = r_squared
+
+    # Risk metrics
+    result['sharpe_ratio'] = calculate_sharpe_ratio(portfolio_df, years)
+    result['sortino_ratio'] = calculate_sortino_ratio(portfolio_df, years)
+    result['volatility'] = calculate_volatility(portfolio_df, years)
+    result['calmar_ratio'] = calculate_calmar_ratio(portfolio_df, years)
+
+    # Drawdown
+    max_dd, peak_date, trough_date = calculate_max_drawdown(portfolio_df, years)
+    result['max_drawdown'] = max_dd
+    result['max_dd_peak'] = peak_date
+    result['max_dd_trough'] = trough_date
+
+    # Information Ratio (vs Nifty 50)
+    result['information_ratio'] = calculate_information_ratio(
+        portfolio_df, primary_benchmark, years
+    )
+
+    # Win rate
+    result['win_rate'] = calculate_win_rate(portfolio_df, years)
+
+    return result
 
 
 def get_unique_deposits_withdrawals(value_data):
@@ -1372,16 +1428,33 @@ def generate_report(data, user_id, benchmarks_data=None):
     if financial_metrics:
         report.append("## Performance vs Benchmarks")
         report.append("")
+
+        # Show account age
+        all_time = financial_metrics.get('All', {})
+        account_age_years = all_time.get('account_age_years', 0)
+        account_age_days = all_time.get('account_age_days', 0)
+        if account_age_years > 0:
+            if account_age_years >= 1:
+                report.append(f"*Account age: {account_age_years:.1f} years ({account_age_days} days)*")
+            else:
+                report.append(f"*Account age: {account_age_days} days*")
+            report.append("")
+
         report.append("Compare your portfolio returns against major market indices and assets over different time periods.")
         report.append("")
 
-        # Build comparison table header
+        # Build comparison table header - only include periods with data, plus All Time
         periods_available = [p for p in ["1Y", "3Y", "5Y", "7Y", "10Y"] if p in financial_metrics and financial_metrics[p].get('data_available')]
+        # Add "All" (All Time) at the end if available
+        if "All" in financial_metrics and financial_metrics["All"].get('data_available'):
+            periods_available.append("All")
+
         if periods_available:
             header = "| Asset |"
             separator = "|-------|"
             for period in periods_available:
-                header += f" {period} |"
+                display_period = "All Time" if period == "All" else period
+                header += f" {display_period} |"
                 separator += "------:|"
             report.append(header)
             report.append(separator)
@@ -1414,7 +1487,8 @@ def generate_report(data, user_id, benchmarks_data=None):
             header = "| vs Benchmark |"
             separator = "|--------------|"
             for period in periods_available:
-                header += f" {period} |"
+                display_period = "All Time" if period == "All" else period
+                header += f" {display_period} |"
                 separator += "------:|"
             report.append(header)
             report.append(separator)
@@ -1468,7 +1542,8 @@ def generate_report(data, user_id, benchmarks_data=None):
             header = "| Metric |"
             separator = "|--------|"
             for period in periods_available:
-                header += f" {period} |"
+                display_period = "All Time" if period == "All" else period
+                header += f" {display_period} |"
                 separator += "------:|"
             report.append(header)
             report.append(separator)
