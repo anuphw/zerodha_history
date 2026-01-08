@@ -1216,6 +1216,69 @@ def get_quarterly_data(deposits_by_date, withdrawals_by_date, eq_trades, fo_trad
     return dict(quarters)
 
 
+def calculate_xirr(cash_flows, dates):
+    """Calculate XIRR (Extended Internal Rate of Return).
+
+    Args:
+        cash_flows: List of cash flows (negative for outflows/deposits, positive for inflows/withdrawals)
+        dates: List of dates corresponding to each cash flow
+
+    Returns:
+        XIRR as a decimal (e.g., 0.15 for 15%), or None if calculation fails
+    """
+    if len(cash_flows) < 2 or len(cash_flows) != len(dates):
+        return None
+
+    # Convert dates to days from first date
+    date_objects = [datetime.strptime(d, '%Y-%m-%d') if isinstance(d, str) else d for d in dates]
+    first_date = min(date_objects)
+    days = [(d - first_date).days for d in date_objects]
+
+    # Newton-Raphson method to find XIRR
+    def npv(rate):
+        """Calculate NPV for a given rate."""
+        return sum(cf / ((1 + rate) ** (d / 365.0)) for cf, d in zip(cash_flows, days))
+
+    def npv_derivative(rate):
+        """Calculate derivative of NPV."""
+        return sum(-cf * (d / 365.0) / ((1 + rate) ** (d / 365.0 + 1))
+                   for cf, d in zip(cash_flows, days))
+
+    # Initial guess
+    rate = 0.1
+
+    # Newton-Raphson iterations
+    for _ in range(100):
+        npv_value = npv(rate)
+        npv_deriv = npv_derivative(rate)
+
+        if abs(npv_deriv) < 1e-10:
+            break
+
+        new_rate = rate - npv_value / npv_deriv
+
+        # Bound the rate to reasonable values
+        new_rate = max(-0.99, min(10.0, new_rate))
+
+        if abs(new_rate - rate) < 1e-7:
+            return new_rate
+
+        rate = new_rate
+
+    # If Newton-Raphson didn't converge, try bisection
+    low, high = -0.99, 5.0
+    for _ in range(100):
+        mid = (low + high) / 2
+        if npv(mid) > 0:
+            low = mid
+        else:
+            high = mid
+        if abs(high - low) < 1e-7:
+            return mid
+
+    return None
+
+
 def format_inr(amount):
     """Format amount in Indian Rupee style."""
     if amount < 0:
@@ -1276,6 +1339,27 @@ def generate_report(data, user_id, benchmarks_data=None):
     total_realized_pnl = eq_realized_pnl + fo_realized
     overall_gain = current_value - net_invested
     return_pct = (overall_gain / net_invested * 100) if net_invested > 0 else 0
+
+    # Calculate XIRR
+    # Cash flows: deposits are negative (outflow), withdrawals are positive (inflow)
+    # Final portfolio value is a positive inflow on current date
+    xirr_cash_flows = []
+    xirr_dates = []
+
+    for date, amount in sorted(deposits_by_date.items()):
+        xirr_cash_flows.append(-amount)  # Deposits are outflows
+        xirr_dates.append(date)
+
+    for date, amount in sorted(withdrawals_by_date.items()):
+        xirr_cash_flows.append(amount)  # Withdrawals are inflows
+        xirr_dates.append(date)
+
+    # Add current portfolio value as final inflow
+    if current_value > 0:
+        xirr_cash_flows.append(current_value)
+        xirr_dates.append(current_date)
+
+    xirr = calculate_xirr(xirr_cash_flows, xirr_dates)
 
     # Quarterly data
     quarterly = get_quarterly_data(deposits_by_date, withdrawals_by_date, eq_trades, fo_trades, value_data)
@@ -1350,7 +1434,9 @@ def generate_report(data, user_id, benchmarks_data=None):
     report.append(f"| Net Invested | {format_inr(net_invested)} |")
     report.append(f"| **Current Value** | **{format_inr(current_value)}** |")
     report.append(f"| **Overall Gain/Loss** | **{format_inr(overall_gain)}** |")
-    report.append(f"| **Return** | **{return_pct:+.1f}%** |")
+    report.append(f"| **Absolute Return** | **{return_pct:+.1f}%** |")
+    if xirr is not None:
+        report.append(f"| **XIRR (Annualized)** | **{xirr*100:+.1f}%** |")
     report.append("")
 
     # Current Portfolio
