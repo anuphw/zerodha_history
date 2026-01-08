@@ -117,11 +117,20 @@ def get_console_cookies_manual():
         console_page.wait_for_load_state("networkidle")
         print("Tradebook page loaded")
 
-        # Extract cookies from the console page context
-        cookies = context.cookies("https://console.zerodha.com")
-        cookie_dict = {c["name"]: c["value"] for c in cookies}
+        # Extract cookies from both console and kite domains
+        console_cookies = context.cookies("https://console.zerodha.com")
+        kite_cookies = context.cookies("https://kite.zerodha.com")
+
+        # Merge cookies (kite cookies first, then console)
+        cookie_dict = {}
+        for c in kite_cookies:
+            cookie_dict[c["name"]] = c["value"]
+        for c in console_cookies:
+            cookie_dict[c["name"]] = c["value"]
 
         print(f"Extracted {len(cookie_dict)} cookies")
+        if "enctoken" in cookie_dict:
+            print("enctoken cookie found")
         if "public_token" in cookie_dict:
             print("public_token cookie found")
         else:
@@ -219,16 +228,40 @@ def fetch_account_values(cookies):
 
 
 def fetch_profile(cookies):
-    """Fetch user profile from Kite API."""
-    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    """Fetch user profile from Kite API using enctoken."""
+    enctoken = cookies.get("enctoken", "")
 
+    if enctoken:
+        # Use enctoken authentication (most reliable)
+        try:
+            session = requests.Session()
+            headers = {
+                "Authorization": f"enctoken {enctoken}",
+                "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            }
+            # Initialize session
+            session.get("https://kite.zerodha.com/oms", headers=headers)
+            # Fetch profile
+            resp = session.get(
+                "https://kite.zerodha.com/oms/user/profile",
+                headers=headers,
+                timeout=30
+            )
+            if resp.status_code == 200:
+                data = resp.json().get("data", {})
+                if data:
+                    return data
+        except Exception as e:
+            print(f"Warning: Could not fetch profile with enctoken: {e}")
+
+    # Fallback to cookie-based auth
+    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
     headers = {
         "accept": "application/json, text/plain, */*",
         "cookie": cookie_str,
         "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     }
 
-    # Try Kite API first (more reliable)
     try:
         url = "https://kite.zerodha.com/oms/user/profile"
         resp = requests.get(url, headers=headers, timeout=30)
@@ -238,17 +271,6 @@ def fetch_profile(cookies):
                 return data
     except Exception as e:
         print(f"Warning: Could not fetch from Kite API: {e}")
-
-    # Fallback to Console API
-    try:
-        headers["x-csrftoken"] = cookies.get("public_token", "")
-        headers["referer"] = "https://console.zerodha.com/"
-        url = "https://console.zerodha.com/api/user/profile"
-        resp = requests.get(url, headers=headers, timeout=30)
-        if resp.status_code == 200:
-            return resp.json().get("data", {})
-    except Exception as e:
-        print(f"Warning: Could not fetch from Console API: {e}")
 
     return {}
 
