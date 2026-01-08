@@ -110,9 +110,22 @@ uv sync
 uv run playwright install chromium
 ```
 
+### Easy Run Scripts
+
+After cloning, just double-click to run:
+
+**Windows:** Double-click `run.bat`
+
+**macOS / Linux:**
+```bash
+./run.sh
+```
+
+These scripts automatically install uv, dependencies, and browser on first run.
+
 ### Windows One-Liner
 
-Run this in PowerShell to install everything and run:
+Or run this in PowerShell to do everything in one go:
 
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"; git clone https://github.com/anuphw/zerodha_history.git; cd zerodha_history; uv sync; uv run playwright install chromium; uv run python zerodha_history.py --fetch
