@@ -59,24 +59,26 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 
 ### Performance vs Benchmarks
 
-| Asset | 1Y | 3Y | 5Y | 7Y | 10Y |
-|-------|---:|---:|---:|---:|----:|
-| **Your Portfolio** | **+18.5%** | **+52.3%** | **+89.2%** | **+145.7%** | **+234.5%** |
-| Nifty 50 | +12.3% | +38.7% | +72.4% | +112.3% | +187.2% |
-| Bank Nifty | +8.7% | +25.4% | +58.9% | +98.4% | +156.8% |
-| Gold (INR) | +15.2% | +42.1% | +68.3% | +95.2% | +142.6% |
-| S&P 500 (INR) | +22.1% | +48.9% | +95.7% | +168.3% | +298.4% |
+| Asset | 1Y | 3Y | 5Y | All Time |
+|-------|---:|---:|---:|---------:|
+| **Your Portfolio** | **+18.5%** | **+52.3%** | **+89.2%** | **+112.4%** |
+| Nifty 50 | +12.3% | +38.7% | +72.4% | +95.6% |
+| Bank Nifty | +8.7% | +25.4% | +58.9% | +78.3% |
+| Gold (INR) | +15.2% | +42.1% | +68.3% | +82.1% |
+| S&P 500 (INR) | +22.1% | +48.9% | +95.7% | +124.5% |
+
+*Only periods shorter than your account age are shown.*
 
 ### Risk-Adjusted Metrics
 
-| Metric | 1Y | 3Y | 5Y |
-|--------|---:|---:|---:|
-| **Alpha** | +5.23% | +4.12% | +3.87% |
-| **Beta** | 0.92 | 0.88 | 0.85 |
-| **Sharpe Ratio** | 1.24 | 1.18 | 1.32 |
-| **Sortino Ratio** | 1.67 | 1.52 | 1.71 |
-| **Max Drawdown** | -12.3% | -18.7% | -24.5% |
-| **Volatility** | 18.4% | 19.2% | 20.1% |
+| Metric | 1Y | 3Y | 5Y | All Time |
+|--------|---:|---:|---:|---------:|
+| **Alpha** | +5.23% | +4.12% | +3.87% | +3.94% |
+| **Beta** | 0.92 | 0.88 | 0.85 | 0.87 |
+| **Sharpe Ratio** | 1.24 | 1.18 | 1.32 | 1.28 |
+| **Sortino Ratio** | 1.67 | 1.52 | 1.71 | 1.65 |
+| **Max Drawdown** | -12.3% | -18.7% | -24.5% | -24.5% |
+| **Volatility** | 18.4% | 19.2% | 20.1% | 19.8% |
 
 ---
 
@@ -85,7 +87,7 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 ### Prerequisites
 
 - Python 3.10 or higher
-- [uv](https://github.com/astral-sh/uv) - Fast Python package manager
+- [uv](https://docs.astral.sh/uv/) - Fast Python package manager
 
 ### Step 1: Install uv
 
@@ -126,13 +128,17 @@ After cloning, just double-click to run:
 
 These scripts automatically install uv, dependencies, and browser on first run.
 
-### Windows One-Liner
+### Quick Start (Windows)
 
-Or run this in PowerShell to do everything in one go:
+Copy-paste this into PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"; git clone https://github.com/anuphw/zerodha_history.git; cd zerodha_history; uv sync; uv run playwright install chromium; uv run python zerodha_history.py --fetch
+git clone https://github.com/anuphw/zerodha_history.git
+cd zerodha_history
+.\run.bat
 ```
+
+The script handles everything automatically.
 
 ---
 
@@ -149,7 +155,7 @@ This will:
 2. Navigate to Zerodha Kite login
 3. Wait for you to complete login (including 2FA)
 4. Automatically fetch all your trading data
-5. Generate a comprehensive markdown report
+5. Generate comprehensive Markdown and HTML reports
 
 ### Generate Report from Existing Data
 
@@ -293,11 +299,12 @@ The report includes professional-grade financial metrics. Here's what they mean:
 
 ### Time Period Comparison
 
-The report shows metrics for **1 year, 3 years, 5 years, 7 years, and 10 years** where data is available. This helps you see:
+The report shows metrics for **1Y, 3Y, 5Y, 7Y, 10Y, and All Time** - but only periods shorter than your account age are displayed. This helps you see:
 
 - **Short-term (1Y)**: Recent performance, could be luck or skill
 - **Medium-term (3Y-5Y)**: More reliable signal about your strategy
-- **Long-term (7Y-10Y)**: True test of your approach through multiple market cycles
+- **Long-term (7Y+)**: True test of your approach through multiple market cycles
+- **All Time**: Your complete trading history since account opening
 
 ---
 
