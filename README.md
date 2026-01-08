@@ -17,6 +17,8 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 - **Physical Deliveries** - F&O positions that resulted in stock delivery? We track those too
 - **Benchmark Comparisons** - Did you beat Nifty 50? Bank Nifty? Gold? S&P 500? See exactly where you stand
 - **Risk-Adjusted Metrics** - Alpha, Beta, Sharpe Ratio, Sortino Ratio, Max Drawdown and more - the metrics pros use
+- **XIRR Calculation** - True annualized returns accounting for timing of deposits/withdrawals
+- **Beautiful HTML Reports** - Styled reports with green/red profit/loss coloring
 
 ---
 
@@ -31,7 +33,8 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 │  Net Invested           ₹16,50,000                      │
 │  Current Value          ₹21,34,567                      │
 │  Overall Gain/Loss      ₹4,84,567                       │
-│  Return                 +29.4%                          │
+│  Absolute Return        +29.4%                          │
+│  XIRR (Annualized)      +12.8%                          │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -212,7 +215,7 @@ uv run python zerodha_history.py --fetch -o my_report.md
    - Maximum drawdown analysis
    - Win rate and volatility
 
-7. **Report Generation** - Creates a detailed markdown report you can view in any text editor or render beautifully on GitHub.
+7. **Report Generation** - Creates both Markdown and styled HTML reports with green/red color coding for profits/losses.
 
 ---
 
@@ -223,11 +226,13 @@ All data is stored locally in the `tmp/<user_id>/` directory:
 ```
 tmp/
 └── AB1234/
-    ├── EQ.jsonl      # Equity trades
-    ├── FO.jsonl      # F&O trades
-    ├── value.jsonl   # Account values
-    ├── profile.json  # User profile
-    └── AB1234_Name.md   # Generated report
+    ├── EQ.jsonl          # Equity trades
+    ├── FO.jsonl          # F&O trades
+    ├── value.jsonl       # Account values
+    ├── benchmarks.json   # Cached benchmark data
+    ├── profile.json      # User profile
+    ├── AB1234_Name.md    # Markdown report
+    └── AB1234_Name.html  # Styled HTML report
 ```
 
 **Your data never leaves your machine.** This tool only communicates with Zerodha's servers using your authenticated session.
@@ -265,6 +270,8 @@ The report includes professional-grade financial metrics. Here's what they mean:
 
 | Metric | What It Tells You |
 |--------|-------------------|
+| **Absolute Return** | Simple return: (Current Value - Net Invested) / Net Invested |
+| **XIRR** | Annualized return accounting for timing of each deposit/withdrawal. This is the true measure of your performance. |
 | **Portfolio Return** | Your total return over the period, adjusted for deposits and withdrawals |
 | **Benchmark Return** | How the market index performed over the same period |
 | **Outperformance** | Difference between your return and the benchmark - positive = you beat the market |
