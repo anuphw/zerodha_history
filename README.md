@@ -65,7 +65,7 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/zerodha_history.git
+git clone https://github.com/anuphw/zerodha_history.git
 cd zerodha_history
 
 # Install dependencies with uv
