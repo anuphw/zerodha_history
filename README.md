@@ -84,7 +84,19 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 - Python 3.10 or higher
 - [uv](https://github.com/astral-sh/uv) - Fast Python package manager
 
-### Quick Start
+### Step 1: Install uv
+
+**Windows (PowerShell):**
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+**macOS / Linux:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Step 2: Clone and Setup
 
 ```bash
 # Clone the repository
@@ -96,6 +108,14 @@ uv sync
 
 # Install Playwright browsers (required for login)
 uv run playwright install chromium
+```
+
+### Windows One-Liner
+
+Run this in PowerShell to install everything and run:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"; git clone https://github.com/anuphw/zerodha_history.git; cd zerodha_history; uv sync; uv run playwright install chromium; uv run python zerodha_history.py --fetch
 ```
 
 ---
