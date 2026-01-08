@@ -10,6 +10,22 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
+import numpy as np
+import pandas as pd
+import yfinance as yf
+
+# Benchmark indices configuration
+# Yahoo Finance tickers for Indian and global indices
+BENCHMARKS = {
+    "Nifty 50": "^NSEI",
+    "Bank Nifty": "^NSEBANK",
+    "Nifty IT": "^CNXIT",
+    "Gold (INR)": "GC=F",  # Gold futures, will convert to INR
+    "S&P 500 (INR)": "^GSPC",  # S&P 500, will convert to INR
+}
+
+# Risk-free rate (approximate Indian 10-year G-Sec yield)
+RISK_FREE_RATE = 0.07  # 7% annual
 
 # Global API call counter for rate limiting
 _api_call_count = 0
@@ -353,6 +369,468 @@ def parse_value(v):
     return float(v)
 
 
+def fetch_benchmark_data(start_date, end_date):
+    """Fetch benchmark data from Yahoo Finance.
+
+    Returns a dict of DataFrames with daily closing prices.
+    For USD-based assets (Gold, S&P 500), converts to INR.
+    """
+    print("Fetching benchmark data from Yahoo Finance...")
+    benchmarks_data = {}
+
+    # Fetch USD/INR for conversion
+    try:
+        usdinr = yf.download("USDINR=X", start=start_date, end=end_date, progress=False)
+        if usdinr.empty:
+            # Fallback: use a reasonable average
+            usdinr_rate = 83.0
+        else:
+            usdinr_rate = usdinr['Close'].ffill()
+    except Exception as e:
+        print(f"  Warning: Could not fetch USD/INR rate: {e}")
+        usdinr_rate = 83.0
+
+    for name, ticker in BENCHMARKS.items():
+        try:
+            data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+            if not data.empty:
+                # Convert USD-based assets to INR
+                if name in ["Gold (INR)", "S&P 500 (INR)"]:
+                    if isinstance(usdinr_rate, pd.Series):
+                        # Align dates and multiply
+                        data = data.reindex(usdinr_rate.index, method='ffill')
+                        data['Close'] = data['Close'] * usdinr_rate
+                    else:
+                        data['Close'] = data['Close'] * usdinr_rate
+
+                benchmarks_data[name] = data['Close']
+                print(f"  Fetched {name}: {len(data)} data points")
+            else:
+                print(f"  Warning: No data for {name}")
+        except Exception as e:
+            print(f"  Warning: Could not fetch {name}: {e}")
+
+    return benchmarks_data
+
+
+def build_portfolio_timeseries(value_data, deposits_by_date, withdrawals_by_date):
+    """Build a time series of portfolio values and calculate returns.
+
+    Uses Time-Weighted Return (TWR) methodology to account for cash flows.
+    Returns a DataFrame with dates, values, and daily returns.
+    """
+    eq_values = [r for r in value_data if r['segment'] == 'EQ']
+    if not eq_values:
+        return pd.DataFrame()
+
+    # Build daily portfolio values
+    records = []
+    for r in sorted(eq_values, key=lambda x: x['trade_date']):
+        date = r['trade_date']
+        cash = parse_value(r['values'][3])
+        holdings = parse_value(r['values'][5])
+        mf = parse_value(r['values'][6])
+        total = cash + holdings + mf
+
+        deposit = deposits_by_date.get(date, 0)
+        withdrawal = withdrawals_by_date.get(date, 0)
+
+        records.append({
+            'date': pd.to_datetime(date),
+            'value': total,
+            'deposit': deposit,
+            'withdrawal': withdrawal,
+            'cash_flow': deposit - withdrawal
+        })
+
+    df = pd.DataFrame(records)
+    if df.empty:
+        return df
+
+    df = df.set_index('date').sort_index()
+
+    # Remove duplicate dates, keeping last value
+    df = df[~df.index.duplicated(keep='last')]
+
+    # Calculate daily returns adjusted for cash flows (TWR approximation)
+    # Return = (End Value - Cash Flow) / Start Value - 1
+    df['prev_value'] = df['value'].shift(1)
+    df['daily_return'] = (df['value'] - df['cash_flow']) / df['prev_value'] - 1
+    df.loc[df['prev_value'] == 0, 'daily_return'] = 0
+    df.loc[df['prev_value'].isna(), 'daily_return'] = 0
+    df['daily_return'] = df['daily_return'].clip(-0.5, 0.5)  # Cap extreme values
+
+    return df
+
+
+def calculate_returns_for_period(portfolio_df, benchmark_series, years):
+    """Calculate portfolio and benchmark returns for a given period.
+
+    Returns tuple: (portfolio_return, benchmark_return, num_days)
+    """
+    if portfolio_df.empty:
+        return None, None, 0
+
+    end_date = portfolio_df.index.max()
+    start_date = end_date - pd.DateOffset(years=years)
+
+    # Filter to period
+    mask = portfolio_df.index >= start_date
+    period_df = portfolio_df[mask]
+
+    if len(period_df) < 20:  # Need at least ~1 month of data
+        return None, None, 0
+
+    # Portfolio return using TWR (compounding daily returns)
+    portfolio_return = (1 + period_df['daily_return']).prod() - 1
+
+    # Benchmark return
+    benchmark_return = None
+    if benchmark_series is not None and not benchmark_series.empty:
+        bench_period = benchmark_series[benchmark_series.index >= start_date]
+        if len(bench_period) >= 2:
+            benchmark_return = (bench_period.iloc[-1] / bench_period.iloc[0]) - 1
+
+    return portfolio_return, benchmark_return, len(period_df)
+
+
+def calculate_alpha_beta(portfolio_df, benchmark_series, years=None):
+    """Calculate Alpha and Beta relative to a benchmark.
+
+    Alpha: Excess return over benchmark (risk-adjusted)
+    Beta: Portfolio sensitivity to market movements
+
+    Returns tuple: (alpha, beta, r_squared)
+    """
+    if portfolio_df.empty or benchmark_series is None or benchmark_series.empty:
+        return None, None, None
+
+    # Filter by time period if specified
+    if years:
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        portfolio_df = portfolio_df[portfolio_df.index >= start_date]
+
+    # Align dates
+    common_dates = portfolio_df.index.intersection(benchmark_series.index)
+    if len(common_dates) < 30:
+        return None, None, None
+
+    # Get aligned returns
+    port_returns = portfolio_df.loc[common_dates, 'daily_return'].dropna()
+
+    # Calculate benchmark daily returns
+    bench_values = benchmark_series.loc[common_dates]
+    bench_returns = bench_values.pct_change().dropna()
+
+    # Align again after pct_change
+    common = port_returns.index.intersection(bench_returns.index)
+    if len(common) < 30:
+        return None, None, None
+
+    port_ret = port_returns.loc[common].values
+    bench_ret = bench_returns.loc[common].values
+
+    # Remove any NaN or inf values
+    mask = np.isfinite(port_ret) & np.isfinite(bench_ret)
+    port_ret = port_ret[mask]
+    bench_ret = bench_ret[mask]
+
+    if len(port_ret) < 30:
+        return None, None, None
+
+    # Calculate Beta using covariance method
+    cov_matrix = np.cov(port_ret, bench_ret)
+    beta = cov_matrix[0, 1] / cov_matrix[1, 1] if cov_matrix[1, 1] != 0 else None
+
+    # Calculate Alpha (annualized)
+    # Alpha = Portfolio Return - (Risk-free + Beta * (Market Return - Risk-free))
+    port_annual = (1 + np.mean(port_ret)) ** 252 - 1
+    bench_annual = (1 + np.mean(bench_ret)) ** 252 - 1
+
+    if beta is not None:
+        alpha = port_annual - (RISK_FREE_RATE + beta * (bench_annual - RISK_FREE_RATE))
+    else:
+        alpha = None
+
+    # R-squared
+    if len(port_ret) > 2:
+        correlation = np.corrcoef(port_ret, bench_ret)[0, 1]
+        r_squared = correlation ** 2 if np.isfinite(correlation) else None
+    else:
+        r_squared = None
+
+    return alpha, beta, r_squared
+
+
+def calculate_sharpe_ratio(portfolio_df, years=None):
+    """Calculate Sharpe Ratio.
+
+    Sharpe = (Portfolio Return - Risk-free Rate) / Portfolio Std Dev
+    Measures risk-adjusted return per unit of volatility.
+    """
+    if portfolio_df.empty:
+        return None
+
+    if years:
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        portfolio_df = portfolio_df[portfolio_df.index >= start_date]
+
+    returns = portfolio_df['daily_return'].dropna()
+    if len(returns) < 30:
+        return None
+
+    # Annualize
+    annual_return = (1 + returns.mean()) ** 252 - 1
+    annual_std = returns.std() * np.sqrt(252)
+
+    if annual_std == 0:
+        return None
+
+    sharpe = (annual_return - RISK_FREE_RATE) / annual_std
+    return sharpe
+
+
+def calculate_sortino_ratio(portfolio_df, years=None):
+    """Calculate Sortino Ratio.
+
+    Sortino = (Portfolio Return - Risk-free Rate) / Downside Deviation
+    Like Sharpe but only penalizes downside volatility.
+    """
+    if portfolio_df.empty:
+        return None
+
+    if years:
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        portfolio_df = portfolio_df[portfolio_df.index >= start_date]
+
+    returns = portfolio_df['daily_return'].dropna()
+    if len(returns) < 30:
+        return None
+
+    # Annualize return
+    annual_return = (1 + returns.mean()) ** 252 - 1
+
+    # Downside deviation (only negative returns)
+    negative_returns = returns[returns < 0]
+    if len(negative_returns) == 0:
+        return None  # No downside = undefined
+
+    downside_std = np.sqrt(np.mean(negative_returns ** 2)) * np.sqrt(252)
+
+    if downside_std == 0:
+        return None
+
+    sortino = (annual_return - RISK_FREE_RATE) / downside_std
+    return sortino
+
+
+def calculate_max_drawdown(portfolio_df, years=None):
+    """Calculate Maximum Drawdown.
+
+    Max Drawdown = Largest peak-to-trough decline
+    Measures worst-case loss from any high point.
+    """
+    if portfolio_df.empty:
+        return None, None, None
+
+    if years:
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        portfolio_df = portfolio_df[portfolio_df.index >= start_date]
+
+    values = portfolio_df['value']
+    if len(values) < 2:
+        return None, None, None
+
+    # Calculate running maximum
+    running_max = values.expanding().max()
+    drawdown = (values - running_max) / running_max
+
+    max_dd = drawdown.min()
+    max_dd_date = drawdown.idxmin()
+
+    # Find the peak before the max drawdown
+    peak_date = values[:max_dd_date].idxmax() if max_dd_date else None
+
+    return max_dd, peak_date, max_dd_date
+
+
+def calculate_volatility(portfolio_df, years=None):
+    """Calculate annualized volatility (standard deviation of returns)."""
+    if portfolio_df.empty:
+        return None
+
+    if years:
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        portfolio_df = portfolio_df[portfolio_df.index >= start_date]
+
+    returns = portfolio_df['daily_return'].dropna()
+    if len(returns) < 30:
+        return None
+
+    return returns.std() * np.sqrt(252)
+
+
+def calculate_calmar_ratio(portfolio_df, years=None):
+    """Calculate Calmar Ratio.
+
+    Calmar = Annual Return / |Max Drawdown|
+    Measures return per unit of drawdown risk.
+    """
+    if portfolio_df.empty:
+        return None
+
+    if years:
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        period_df = portfolio_df[portfolio_df.index >= start_date]
+    else:
+        period_df = portfolio_df
+
+    if len(period_df) < 30:
+        return None
+
+    # Annual return
+    returns = period_df['daily_return'].dropna()
+    annual_return = (1 + returns.mean()) ** 252 - 1
+
+    # Max drawdown
+    max_dd, _, _ = calculate_max_drawdown(period_df)
+
+    if max_dd is None or max_dd == 0:
+        return None
+
+    return annual_return / abs(max_dd)
+
+
+def calculate_information_ratio(portfolio_df, benchmark_series, years=None):
+    """Calculate Information Ratio.
+
+    IR = (Portfolio Return - Benchmark Return) / Tracking Error
+    Measures excess return per unit of tracking error.
+    """
+    if portfolio_df.empty or benchmark_series is None or benchmark_series.empty:
+        return None
+
+    if years:
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        portfolio_df = portfolio_df[portfolio_df.index >= start_date]
+
+    # Align dates
+    common_dates = portfolio_df.index.intersection(benchmark_series.index)
+    if len(common_dates) < 30:
+        return None
+
+    port_returns = portfolio_df.loc[common_dates, 'daily_return'].dropna()
+    bench_values = benchmark_series.loc[common_dates]
+    bench_returns = bench_values.pct_change().dropna()
+
+    common = port_returns.index.intersection(bench_returns.index)
+    if len(common) < 30:
+        return None
+
+    excess_returns = port_returns.loc[common] - bench_returns.loc[common]
+
+    # Annualize
+    annual_excess = excess_returns.mean() * 252
+    tracking_error = excess_returns.std() * np.sqrt(252)
+
+    if tracking_error == 0:
+        return None
+
+    return annual_excess / tracking_error
+
+
+def calculate_win_rate(portfolio_df, years=None):
+    """Calculate win rate (percentage of positive days)."""
+    if portfolio_df.empty:
+        return None
+
+    if years:
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        portfolio_df = portfolio_df[portfolio_df.index >= start_date]
+
+    returns = portfolio_df['daily_return'].dropna()
+    if len(returns) < 10:
+        return None
+
+    positive_days = (returns > 0).sum()
+    return positive_days / len(returns)
+
+
+def calculate_all_metrics(portfolio_df, benchmarks_data, time_periods=[1, 3, 5, 7, 10]):
+    """Calculate all financial metrics for multiple time periods.
+
+    Returns a nested dict: {period: {metric: value}}
+    """
+    results = {}
+
+    # Use Nifty 50 as primary benchmark
+    primary_benchmark = benchmarks_data.get("Nifty 50")
+
+    for years in time_periods:
+        period_key = f"{years}Y"
+        results[period_key] = {}
+
+        # Check if we have enough data for this period
+        if portfolio_df.empty:
+            continue
+
+        end_date = portfolio_df.index.max()
+        start_date = end_date - pd.DateOffset(years=years)
+        period_data = portfolio_df[portfolio_df.index >= start_date]
+
+        if len(period_data) < 30:
+            results[period_key]['data_available'] = False
+            continue
+
+        results[period_key]['data_available'] = True
+
+        # Portfolio return
+        port_return, _, _ = calculate_returns_for_period(portfolio_df, None, years)
+        results[period_key]['portfolio_return'] = port_return
+
+        # Benchmark returns
+        results[period_key]['benchmark_returns'] = {}
+        for bench_name, bench_series in benchmarks_data.items():
+            _, bench_return, _ = calculate_returns_for_period(portfolio_df, bench_series, years)
+            results[period_key]['benchmark_returns'][bench_name] = bench_return
+
+        # Alpha and Beta (vs Nifty 50)
+        alpha, beta, r_squared = calculate_alpha_beta(portfolio_df, primary_benchmark, years)
+        results[period_key]['alpha'] = alpha
+        results[period_key]['beta'] = beta
+        results[period_key]['r_squared'] = r_squared
+
+        # Risk metrics
+        results[period_key]['sharpe_ratio'] = calculate_sharpe_ratio(portfolio_df, years)
+        results[period_key]['sortino_ratio'] = calculate_sortino_ratio(portfolio_df, years)
+        results[period_key]['volatility'] = calculate_volatility(portfolio_df, years)
+        results[period_key]['calmar_ratio'] = calculate_calmar_ratio(portfolio_df, years)
+
+        # Drawdown
+        max_dd, peak_date, trough_date = calculate_max_drawdown(portfolio_df, years)
+        results[period_key]['max_drawdown'] = max_dd
+        results[period_key]['max_dd_peak'] = peak_date
+        results[period_key]['max_dd_trough'] = trough_date
+
+        # Information Ratio (vs Nifty 50)
+        results[period_key]['information_ratio'] = calculate_information_ratio(
+            portfolio_df, primary_benchmark, years
+        )
+
+        # Win rate
+        results[period_key]['win_rate'] = calculate_win_rate(portfolio_df, years)
+
+    return results
+
+
 def get_unique_deposits_withdrawals(value_data):
     """Get unique deposits and withdrawals per date (avoid duplicates)."""
     eq_values = [r for r in value_data if r['segment'] == 'EQ']
@@ -595,7 +1073,7 @@ def format_inr_lakhs(amount):
     return f"₹{lakhs:.2f}L"
 
 
-def generate_report(data, user_id):
+def generate_report(data, user_id, benchmarks_data=None):
     """Generate the markdown report."""
     eq_trades = data['EQ']
     fo_trades = data['FO']
@@ -654,6 +1132,12 @@ def generate_report(data, user_id):
         key=lambda x: -x[1]['cost']
     )[:10]
 
+    # Build portfolio time series and calculate advanced metrics
+    portfolio_df = build_portfolio_timeseries(value_data, deposits_by_date, withdrawals_by_date)
+    if benchmarks_data is None:
+        benchmarks_data = {}
+    financial_metrics = calculate_all_metrics(portfolio_df, benchmarks_data) if not portfolio_df.empty else {}
+
     # Generate report
     report = []
     user_name = profile.get('user_name') or profile.get('name') or profile.get('user_shortname') or 'Unknown'
@@ -669,14 +1153,16 @@ def generate_report(data, user_id):
     report.append("4. [The Account Story](#the-account-story)")
     report.append("5. [Profit & Loss Summary](#profit--loss-summary)")
     report.append("6. [Key Metrics](#key-metrics)")
-    report.append("7. [Top 10 Current Holdings](#top-10-current-holdings)")
-    report.append("8. [Quarterly Summary](#quarterly-summary)")
-    report.append("9. [Yearly Summary](#yearly-summary)")
-    report.append("10. [Equity Transactions](#equity-transactions)")
-    report.append("11. [F&O Transactions](#fo-transactions)")
-    report.append("12. [Deposits](#deposits)")
-    report.append("13. [Withdrawals](#withdrawals)")
-    report.append("14. [Detailed Quarterly Breakdown](#detailed-quarterly-breakdown)")
+    report.append("7. [Performance vs Benchmarks](#performance-vs-benchmarks)")
+    report.append("8. [Risk-Adjusted Metrics](#risk-adjusted-metrics)")
+    report.append("9. [Top 10 Current Holdings](#top-10-current-holdings)")
+    report.append("10. [Quarterly Summary](#quarterly-summary)")
+    report.append("11. [Yearly Summary](#yearly-summary)")
+    report.append("12. [Equity Transactions](#equity-transactions)")
+    report.append("13. [F&O Transactions](#fo-transactions)")
+    report.append("14. [Deposits](#deposits)")
+    report.append("15. [Withdrawals](#withdrawals)")
+    report.append("16. [Detailed Quarterly Breakdown](#detailed-quarterly-breakdown)")
     report.append("")
 
     # Profile
@@ -802,6 +1288,235 @@ def generate_report(data, user_id):
     report.append(f"| Current Wealth | {format_inr(current_value)} | Cash + Holdings + MF |")
     report.append(f"| Total Return | {return_pct:+.1f}% | Overall portfolio return |")
     report.append("")
+
+    # Performance vs Benchmarks Section
+    if financial_metrics:
+        report.append("## Performance vs Benchmarks")
+        report.append("")
+        report.append("Compare your portfolio returns against major market indices and assets over different time periods.")
+        report.append("")
+
+        # Build comparison table header
+        periods_available = [p for p in ["1Y", "3Y", "5Y", "7Y", "10Y"] if p in financial_metrics and financial_metrics[p].get('data_available')]
+        if periods_available:
+            header = "| Asset |"
+            separator = "|-------|"
+            for period in periods_available:
+                header += f" {period} |"
+                separator += "------:|"
+            report.append(header)
+            report.append(separator)
+
+            # Portfolio row
+            row = "| **Your Portfolio** |"
+            for period in periods_available:
+                ret = financial_metrics[period].get('portfolio_return')
+                row += f" **{ret*100:+.1f}%** |" if ret is not None else " N/A |"
+            report.append(row)
+
+            # Benchmark rows
+            benchmark_names = ["Nifty 50", "Bank Nifty", "Nifty IT", "Gold (INR)", "S&P 500 (INR)"]
+            for bench_name in benchmark_names:
+                row = f"| {bench_name} |"
+                for period in periods_available:
+                    bench_returns = financial_metrics[period].get('benchmark_returns', {})
+                    ret = bench_returns.get(bench_name)
+                    row += f" {ret*100:+.1f}% |" if ret is not None else " N/A |"
+                report.append(row)
+
+            report.append("")
+
+            # Outperformance summary
+            report.append("### Outperformance Analysis")
+            report.append("")
+            report.append("*Positive values mean you outperformed the benchmark*")
+            report.append("")
+
+            header = "| vs Benchmark |"
+            separator = "|--------------|"
+            for period in periods_available:
+                header += f" {period} |"
+                separator += "------:|"
+            report.append(header)
+            report.append(separator)
+
+            for bench_name in ["Nifty 50", "Bank Nifty", "Gold (INR)", "S&P 500 (INR)"]:
+                row = f"| {bench_name} |"
+                for period in periods_available:
+                    port_ret = financial_metrics[period].get('portfolio_return')
+                    bench_returns = financial_metrics[period].get('benchmark_returns', {})
+                    bench_ret = bench_returns.get(bench_name)
+                    if port_ret is not None and bench_ret is not None:
+                        outperf = (port_ret - bench_ret) * 100
+                        emoji = "" if outperf >= 0 else ""
+                        row += f" {outperf:+.1f}% |"
+                    else:
+                        row += " N/A |"
+                report.append(row)
+
+            report.append("")
+        else:
+            report.append("*Insufficient data for benchmark comparison*")
+            report.append("")
+
+        # Risk-Adjusted Metrics Section
+        report.append("## Risk-Adjusted Metrics")
+        report.append("")
+        report.append("These metrics help you understand if your returns justify the risks you took.")
+        report.append("")
+
+        if periods_available:
+            # Metrics explanation at the top
+            report.append("### Metric Definitions")
+            report.append("")
+            report.append("| Metric | What It Measures | Good Value |")
+            report.append("|--------|-----------------|------------|")
+            report.append("| **Alpha** | Excess return over market after adjusting for risk. Positive alpha = you added value beyond market exposure. | > 0% |")
+            report.append("| **Beta** | Portfolio sensitivity to market. Beta=1 means moves with market. Beta>1 = more volatile, Beta<1 = less volatile. | Depends on risk appetite |")
+            report.append("| **Sharpe Ratio** | Return per unit of total risk (volatility). Higher = better risk-adjusted returns. | > 1.0 |")
+            report.append("| **Sortino Ratio** | Return per unit of downside risk. Like Sharpe but only penalizes losses, not upside volatility. | > 1.5 |")
+            report.append("| **Calmar Ratio** | Annual return divided by max drawdown. Higher = better return per unit of drawdown pain. | > 1.0 |")
+            report.append("| **Information Ratio** | Excess return vs benchmark per unit of tracking error. Measures skill at beating the benchmark. | > 0.5 |")
+            report.append("| **Max Drawdown** | Largest peak-to-trough decline. Shows worst-case loss experienced. | < -20% |")
+            report.append("| **Volatility** | Annualized standard deviation of returns. Higher = more price swings. | < 25% |")
+            report.append("| **Win Rate** | Percentage of positive days. | > 50% |")
+            report.append("")
+
+            # Risk metrics table
+            report.append("### Your Risk Metrics")
+            report.append("")
+
+            header = "| Metric |"
+            separator = "|--------|"
+            for period in periods_available:
+                header += f" {period} |"
+                separator += "------:|"
+            report.append(header)
+            report.append(separator)
+
+            # Alpha
+            row = "| **Alpha** |"
+            for period in periods_available:
+                alpha = financial_metrics[period].get('alpha')
+                row += f" {alpha*100:+.2f}% |" if alpha is not None else " N/A |"
+            report.append(row)
+
+            # Beta
+            row = "| **Beta** |"
+            for period in periods_available:
+                beta = financial_metrics[period].get('beta')
+                row += f" {beta:.2f} |" if beta is not None else " N/A |"
+            report.append(row)
+
+            # Sharpe Ratio
+            row = "| **Sharpe Ratio** |"
+            for period in periods_available:
+                sharpe = financial_metrics[period].get('sharpe_ratio')
+                row += f" {sharpe:.2f} |" if sharpe is not None else " N/A |"
+            report.append(row)
+
+            # Sortino Ratio
+            row = "| **Sortino Ratio** |"
+            for period in periods_available:
+                sortino = financial_metrics[period].get('sortino_ratio')
+                row += f" {sortino:.2f} |" if sortino is not None else " N/A |"
+            report.append(row)
+
+            # Calmar Ratio
+            row = "| **Calmar Ratio** |"
+            for period in periods_available:
+                calmar = financial_metrics[period].get('calmar_ratio')
+                row += f" {calmar:.2f} |" if calmar is not None else " N/A |"
+            report.append(row)
+
+            # Information Ratio
+            row = "| **Information Ratio** |"
+            for period in periods_available:
+                ir = financial_metrics[period].get('information_ratio')
+                row += f" {ir:.2f} |" if ir is not None else " N/A |"
+            report.append(row)
+
+            # Max Drawdown
+            row = "| **Max Drawdown** |"
+            for period in periods_available:
+                max_dd = financial_metrics[period].get('max_drawdown')
+                row += f" {max_dd*100:.1f}% |" if max_dd is not None else " N/A |"
+            report.append(row)
+
+            # Volatility
+            row = "| **Volatility** |"
+            for period in periods_available:
+                vol = financial_metrics[period].get('volatility')
+                row += f" {vol*100:.1f}% |" if vol is not None else " N/A |"
+            report.append(row)
+
+            # Win Rate
+            row = "| **Win Rate** |"
+            for period in periods_available:
+                wr = financial_metrics[period].get('win_rate')
+                row += f" {wr*100:.1f}% |" if wr is not None else " N/A |"
+            report.append(row)
+
+            # R-Squared
+            row = "| **R-Squared** |"
+            for period in periods_available:
+                r2 = financial_metrics[period].get('r_squared')
+                row += f" {r2*100:.1f}% |" if r2 is not None else " N/A |"
+            report.append(row)
+
+            report.append("")
+
+            # Interpretation section
+            report.append("### Interpretation Guide")
+            report.append("")
+
+            # Get 3Y or longest available period for interpretation
+            interpret_period = "3Y" if "3Y" in periods_available else periods_available[-1]
+            metrics = financial_metrics.get(interpret_period, {})
+
+            alpha = metrics.get('alpha')
+            beta = metrics.get('beta')
+            sharpe = metrics.get('sharpe_ratio')
+            max_dd = metrics.get('max_drawdown')
+
+            report.append(f"Based on your **{interpret_period}** performance:")
+            report.append("")
+
+            if alpha is not None:
+                if alpha > 0.05:
+                    report.append(f"- **Alpha ({alpha*100:+.2f}%)**: Excellent! You're generating significant excess returns beyond market exposure.")
+                elif alpha > 0:
+                    report.append(f"- **Alpha ({alpha*100:+.2f}%)**: Good. You're adding some value beyond passive market exposure.")
+                else:
+                    report.append(f"- **Alpha ({alpha*100:+.2f}%)**: Negative alpha suggests you might be better off with index funds.")
+
+            if beta is not None:
+                if beta > 1.2:
+                    report.append(f"- **Beta ({beta:.2f})**: High beta - your portfolio is more volatile than the market. Higher risk, potentially higher reward.")
+                elif beta < 0.8:
+                    report.append(f"- **Beta ({beta:.2f})**: Low beta - your portfolio is less volatile than the market. More defensive positioning.")
+                else:
+                    report.append(f"- **Beta ({beta:.2f})**: Moderate beta - your portfolio moves roughly in line with the market.")
+
+            if sharpe is not None:
+                if sharpe > 1.5:
+                    report.append(f"- **Sharpe Ratio ({sharpe:.2f})**: Excellent risk-adjusted returns! Well above the typical threshold of 1.0.")
+                elif sharpe > 1.0:
+                    report.append(f"- **Sharpe Ratio ({sharpe:.2f})**: Good risk-adjusted returns. Above the typical threshold of 1.0.")
+                elif sharpe > 0:
+                    report.append(f"- **Sharpe Ratio ({sharpe:.2f})**: Positive but modest risk-adjusted returns.")
+                else:
+                    report.append(f"- **Sharpe Ratio ({sharpe:.2f})**: Negative Sharpe - returns don't justify the volatility. Consider reducing risk.")
+
+            if max_dd is not None:
+                if max_dd > -0.10:
+                    report.append(f"- **Max Drawdown ({max_dd*100:.1f}%)**: Minimal drawdown - very stable portfolio.")
+                elif max_dd > -0.25:
+                    report.append(f"- **Max Drawdown ({max_dd*100:.1f}%)**: Moderate drawdown - typical for a diversified equity portfolio.")
+                else:
+                    report.append(f"- **Max Drawdown ({max_dd*100:.1f}%)**: Significant drawdown - you experienced substantial losses at some point.")
+
+            report.append("")
 
     # Top Holdings
     if top_holdings:
@@ -1058,6 +1773,7 @@ def main():
     parser.add_argument("-o", "--output", help="Output markdown file (default: tmp/<user>/<user_id>_<name>.md)")
     parser.add_argument("--fetch", action="store_true", help="Fetch fresh data from Zerodha (opens browser for manual login)")
     parser.add_argument("--from-year", type=int, default=2020, help="Start year for fetching data (default: 2020)")
+    parser.add_argument("--no-benchmarks", action="store_true", help="Skip fetching benchmark data (faster, but no comparisons)")
     args = parser.parse_args()
 
     user = args.user
@@ -1094,8 +1810,23 @@ def main():
     print(f"  Value records: {len(data['value'])}")
     print()
 
+    # Fetch benchmark data for comparisons
+    benchmarks_data = {}
+    if not args.no_benchmarks and data['value']:
+        # Determine date range from data
+        eq_values = [r for r in data['value'] if r['segment'] == 'EQ']
+        if eq_values:
+            dates = [r['trade_date'] for r in eq_values]
+            start_date = min(dates)
+            end_date = max(dates)
+            # Add buffer for benchmark data
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d') - timedelta(days=30)
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=7)
+            benchmarks_data = fetch_benchmark_data(start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'))
+            print()
+
     print("Analyzing account history...")
-    report = generate_report(data, user)
+    report = generate_report(data, user, benchmarks_data)
 
     print(f"Writing report to {args.output}...")
     with open(args.output, 'w') as f:

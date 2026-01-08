@@ -15,6 +15,8 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 - **The Full Picture** - Quarterly and yearly summaries that reveal patterns you never noticed
 - **Every Single Trade** - Complete transaction history with entry/exit prices and P&L per trade
 - **Physical Deliveries** - F&O positions that resulted in stock delivery? We track those too
+- **Benchmark Comparisons** - Did you beat Nifty 50? Bank Nifty? Gold? S&P 500? See exactly where you stand
+- **Risk-Adjusted Metrics** - Alpha, Beta, Sharpe Ratio, Sortino Ratio, Max Drawdown and more - the metrics pros use
 
 ---
 
@@ -51,6 +53,27 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 | 2023-Q2 | ₹1.00L | ₹0.50L | ₹14.23L |
 | 2023-Q3 | ₹0.00L | ₹2.00L | ₹15.67L |
 | 2023-Q4 | ₹3.00L | ₹0.00L | ₹18.90L |
+
+### Performance vs Benchmarks
+
+| Asset | 1Y | 3Y | 5Y | 7Y | 10Y |
+|-------|---:|---:|---:|---:|----:|
+| **Your Portfolio** | **+18.5%** | **+52.3%** | **+89.2%** | **+145.7%** | **+234.5%** |
+| Nifty 50 | +12.3% | +38.7% | +72.4% | +112.3% | +187.2% |
+| Bank Nifty | +8.7% | +25.4% | +58.9% | +98.4% | +156.8% |
+| Gold (INR) | +15.2% | +42.1% | +68.3% | +95.2% | +142.6% |
+| S&P 500 (INR) | +22.1% | +48.9% | +95.7% | +168.3% | +298.4% |
+
+### Risk-Adjusted Metrics
+
+| Metric | 1Y | 3Y | 5Y |
+|--------|---:|---:|---:|
+| **Alpha** | +5.23% | +4.12% | +3.87% |
+| **Beta** | 0.92 | 0.88 | 0.85 |
+| **Sharpe Ratio** | 1.24 | 1.18 | 1.32 |
+| **Sortino Ratio** | 1.67 | 1.52 | 1.71 |
+| **Max Drawdown** | -12.3% | -18.7% | -24.5% |
+| **Volatility** | 18.4% | 19.2% | 20.1% |
 
 ---
 
@@ -124,6 +147,7 @@ uv run python zerodha_history.py --fetch -o my_report.md
 | `-u, --user` | User ID (required when not using --fetch) |
 | `-o, --output` | Output file path (default: `tmp/<user>/<user_id>_<name>.md`) |
 | `--from-year` | Start year for fetching data (default: 2020) |
+| `--no-benchmarks` | Skip fetching benchmark data (faster, but no market comparisons) |
 
 ---
 
@@ -137,11 +161,25 @@ uv run python zerodha_history.py --fetch -o my_report.md
    - Account values over time
    - Profile information
 
-3. **FIFO Analysis** - Calculates realized P&L using First-In-First-Out matching, just like tax authorities expect.
+3. **Benchmark Fetching** - Downloads historical data from Yahoo Finance for:
+   - Nifty 50 (Indian large-cap index)
+   - Bank Nifty (Banking sector index)
+   - Nifty IT (Technology sector index)
+   - Gold (converted to INR)
+   - S&P 500 (converted to INR)
 
-4. **Physical Delivery Detection** - Identifies when your F&O positions resulted in stock delivery and traces them through to sale.
+4. **FIFO Analysis** - Calculates realized P&L using First-In-First-Out matching, just like tax authorities expect.
 
-5. **Report Generation** - Creates a detailed markdown report you can view in any text editor or render beautifully on GitHub.
+5. **Physical Delivery Detection** - Identifies when your F&O positions resulted in stock delivery and traces them through to sale.
+
+6. **Risk Metrics Calculation** - Computes professional-grade metrics:
+   - Time-Weighted Returns (adjusted for deposits/withdrawals)
+   - Alpha and Beta vs market indices
+   - Sharpe and Sortino ratios
+   - Maximum drawdown analysis
+   - Win rate and volatility
+
+7. **Report Generation** - Creates a detailed markdown report you can view in any text editor or render beautifully on GitHub.
 
 ---
 
@@ -173,14 +211,53 @@ The generated report includes:
 4. **The Account Story** - A narrative of your trading journey
 5. **Profit & Loss Summary** - Detailed P&L across all segments
 6. **Key Metrics** - Important numbers every trader should know
-7. **Top 10 Holdings** - Your largest current positions
-8. **Quarterly Summary** - Performance trends over time
-9. **Yearly Summary** - Year-over-year comparison
-10. **Equity Transactions** - Complete EQ trade log with P&L
-11. **F&O Transactions** - Complete F&O trade log with P&L
-12. **Deposits** - All money added to the account
-13. **Withdrawals** - All money taken out
-14. **Detailed Quarterly Breakdown** - Deep dive into each quarter
+7. **Performance vs Benchmarks** - Compare your returns against Nifty, Gold, S&P 500 over 1Y, 3Y, 5Y, 7Y, 10Y
+8. **Risk-Adjusted Metrics** - Alpha, Beta, Sharpe, Sortino, Max Drawdown with explanations
+9. **Top 10 Holdings** - Your largest current positions
+10. **Quarterly Summary** - Performance trends over time
+11. **Yearly Summary** - Year-over-year comparison
+12. **Equity Transactions** - Complete EQ trade log with P&L
+13. **F&O Transactions** - Complete F&O trade log with P&L
+14. **Deposits** - All money added to the account
+15. **Withdrawals** - All money taken out
+16. **Detailed Quarterly Breakdown** - Deep dive into each quarter
+
+---
+
+## Understanding the Metrics
+
+The report includes professional-grade financial metrics. Here's what they mean:
+
+### Performance Metrics
+
+| Metric | What It Tells You |
+|--------|-------------------|
+| **Portfolio Return** | Your total return over the period, adjusted for deposits and withdrawals |
+| **Benchmark Return** | How the market index performed over the same period |
+| **Outperformance** | Difference between your return and the benchmark - positive = you beat the market |
+
+### Risk-Adjusted Metrics
+
+| Metric | What It Tells You | Good Value |
+|--------|-------------------|------------|
+| **Alpha** | Excess return you generated beyond what the market gave you. Positive alpha means your stock picking added value. | > 0% |
+| **Beta** | How much your portfolio moves with the market. Beta=1 means 1:1 with market. Beta=0.5 means half as volatile. | Depends on risk appetite |
+| **Sharpe Ratio** | Return per unit of risk. Higher is better - you're getting more return for the volatility you're taking. | > 1.0 is good, > 2.0 is excellent |
+| **Sortino Ratio** | Like Sharpe but only counts downside volatility. Better for most investors since upside volatility is good. | > 1.5 |
+| **Calmar Ratio** | Return divided by max drawdown. How much return you get per unit of "pain". | > 1.0 |
+| **Information Ratio** | How consistently you beat the benchmark. Higher = more skill, less luck. | > 0.5 |
+| **Max Drawdown** | Your worst peak-to-trough loss. If this is -30%, you once saw your portfolio drop 30% from its high. | > -25% |
+| **Volatility** | How much your portfolio swings. Higher = more uncertainty. | < 25% for most investors |
+| **Win Rate** | Percentage of profitable days. | > 50% |
+| **R-Squared** | How much of your portfolio's movement is explained by the market. Low R² = more independent bets. | Context dependent |
+
+### Time Period Comparison
+
+The report shows metrics for **1 year, 3 years, 5 years, 7 years, and 10 years** where data is available. This helps you see:
+
+- **Short-term (1Y)**: Recent performance, could be luck or skill
+- **Medium-term (3Y-5Y)**: More reliable signal about your strategy
+- **Long-term (7Y-10Y)**: True test of your approach through multiple market cycles
 
 ---
 
