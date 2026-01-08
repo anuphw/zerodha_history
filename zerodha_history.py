@@ -369,46 +369,125 @@ def parse_value(v):
     return float(v)
 
 
-def fetch_benchmark_data(start_date, end_date):
+def get_benchmark_cache_path(user):
+    """Get path for cached benchmark data."""
+    return get_user_data_dir(user) / "benchmarks.json"
+
+
+def save_benchmark_cache(user, benchmarks_data, start_date, end_date):
+    """Save benchmark data to cache."""
+    cache_path = get_benchmark_cache_path(user)
+    cache = {
+        'start_date': start_date,
+        'end_date': end_date,
+        'fetched_at': datetime.now().isoformat(),
+        'data': {}
+    }
+    for name, series in benchmarks_data.items():
+        cache['data'][name] = {
+            'dates': series.index.strftime('%Y-%m-%d').tolist(),
+            'values': series.tolist()
+        }
+    with open(cache_path, 'w') as f:
+        json.dump(cache, f)
+
+
+def load_benchmark_cache(user, start_date, end_date):
+    """Load benchmark data from cache if valid.
+
+    Returns None if cache is missing, stale (>24h), or date range doesn't match.
+    """
+    cache_path = get_benchmark_cache_path(user)
+    if not cache_path.exists():
+        return None
+
+    try:
+        with open(cache_path) as f:
+            cache = json.load(f)
+
+        # Check if cache is recent (within 24 hours)
+        fetched_at = datetime.fromisoformat(cache['fetched_at'])
+        if datetime.now() - fetched_at > timedelta(hours=24):
+            print("  Benchmark cache expired (>24h old)")
+            return None
+
+        # Check date range covers what we need
+        if cache['start_date'] > start_date or cache['end_date'] < end_date:
+            print("  Benchmark cache date range doesn't match")
+            return None
+
+        # Reconstruct Series objects
+        benchmarks_data = {}
+        for name, data in cache['data'].items():
+            dates = pd.to_datetime(data['dates'])
+            benchmarks_data[name] = pd.Series(data['values'], index=dates)
+
+        print(f"  Loaded {len(benchmarks_data)} benchmarks from cache")
+        return benchmarks_data
+
+    except Exception as e:
+        print(f"  Could not load benchmark cache: {e}")
+        return None
+
+
+def fetch_benchmark_data(start_date, end_date, user=None):
     """Fetch benchmark data from Yahoo Finance.
 
     Returns a dict of DataFrames with daily closing prices.
     For USD-based assets (Gold, S&P 500), converts to INR.
+    Uses cache if available and valid.
     """
+    # Try loading from cache first
+    if user:
+        cached = load_benchmark_cache(user, start_date, end_date)
+        if cached:
+            return cached
+
     print("Fetching benchmark data from Yahoo Finance...")
     benchmarks_data = {}
 
     # Fetch USD/INR for conversion
+    usdinr_rate = 83.0  # Default fallback
     try:
         usdinr = yf.download("USDINR=X", start=start_date, end=end_date, progress=False)
-        if usdinr.empty:
-            # Fallback: use a reasonable average
-            usdinr_rate = 83.0
-        else:
-            usdinr_rate = usdinr['Close'].ffill()
+        if not usdinr.empty:
+            # Handle multi-index columns from yfinance
+            close_col = usdinr['Close']
+            if isinstance(close_col, pd.DataFrame):
+                close_col = close_col.iloc[:, 0]  # Get first column if multi-index
+            usdinr_rate = close_col.ffill()
     except Exception as e:
         print(f"  Warning: Could not fetch USD/INR rate: {e}")
-        usdinr_rate = 83.0
 
     for name, ticker in BENCHMARKS.items():
         try:
             data = yf.download(ticker, start=start_date, end=end_date, progress=False)
             if not data.empty:
+                # Handle multi-index columns from yfinance
+                close_col = data['Close']
+                if isinstance(close_col, pd.DataFrame):
+                    close_col = close_col.iloc[:, 0]  # Get first column if multi-index
+
                 # Convert USD-based assets to INR
                 if name in ["Gold (INR)", "S&P 500 (INR)"]:
                     if isinstance(usdinr_rate, pd.Series):
                         # Align dates and multiply
-                        data = data.reindex(usdinr_rate.index, method='ffill')
-                        data['Close'] = data['Close'] * usdinr_rate
+                        aligned_rate = usdinr_rate.reindex(close_col.index, method='ffill')
+                        close_col = close_col * aligned_rate
                     else:
-                        data['Close'] = data['Close'] * usdinr_rate
+                        close_col = close_col * usdinr_rate
 
-                benchmarks_data[name] = data['Close']
-                print(f"  Fetched {name}: {len(data)} data points")
+                benchmarks_data[name] = close_col
+                print(f"  Fetched {name}: {len(close_col)} data points")
             else:
                 print(f"  Warning: No data for {name}")
         except Exception as e:
             print(f"  Warning: Could not fetch {name}: {e}")
+
+    # Save to cache
+    if user and benchmarks_data:
+        save_benchmark_cache(user, benchmarks_data, start_date, end_date)
+        print("  Saved benchmark data to cache")
 
     return benchmarks_data
 
@@ -528,8 +607,8 @@ def calculate_alpha_beta(portfolio_df, benchmark_series, years=None):
     if len(common) < 30:
         return None, None, None
 
-    port_ret = port_returns.loc[common].values
-    bench_ret = bench_returns.loc[common].values
+    port_ret = port_returns.loc[common].values.flatten()
+    bench_ret = bench_returns.loc[common].values.flatten()
 
     # Remove any NaN or inf values
     mask = np.isfinite(port_ret) & np.isfinite(bench_ret)
@@ -1822,7 +1901,7 @@ def main():
             # Add buffer for benchmark data
             start_dt = datetime.strptime(start_date, '%Y-%m-%d') - timedelta(days=30)
             end_dt = datetime.strptime(end_date, '%Y-%m-%d') + timedelta(days=7)
-            benchmarks_data = fetch_benchmark_data(start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'))
+            benchmarks_data = fetch_benchmark_data(start_dt.strftime('%Y-%m-%d'), end_dt.strftime('%Y-%m-%d'), user)
             print()
 
     print("Analyzing account history...")
