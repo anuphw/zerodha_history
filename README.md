@@ -87,67 +87,56 @@ This tool generates a **comprehensive, brutally honest report** of your entire Z
 ### Prerequisites
 
 - Python 3.10 or higher
-- [uv](https://docs.astral.sh/uv/) - Fast Python package manager
 
-### Step 1: Install uv
+### Option A: Using uv (Recommended)
 
-**Windows (PowerShell):**
-```powershell
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager that handles everything automatically.
+
+**Install uv:**
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-**macOS / Linux:**
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### Step 2: Clone and Setup
+**Clone and run:**
 
 ```bash
-# Clone the repository
 git clone https://github.com/anuphw/zerodha_history.git
 cd zerodha_history
-
-# Install dependencies with uv
 uv sync
-
-# Install Playwright browsers (required for login)
 uv run playwright install chromium
+uv run python zerodha_history.py --fetch
 ```
 
-### Easy Run Scripts
+Or just use the easy run scripts after cloning:
+- **Windows:** Double-click `run.bat`
+- **macOS/Linux:** Run `./run.sh`
 
-After cloning, just double-click to run:
+### Option B: Using pip
 
-**Windows:** Double-click `run.bat`
-
-**macOS / Linux:**
 ```bash
-./run.sh
-```
-
-These scripts automatically install uv, dependencies, and browser on first run.
-
-### Quick Start (Windows)
-
-Copy-paste this into PowerShell:
-
-```powershell
 git clone https://github.com/anuphw/zerodha_history.git
 cd zerodha_history
-.\run.bat
+pip install -r requirements.txt
+playwright install chromium
+python zerodha_history.py --fetch
 ```
-
-The script handles everything automatically.
 
 ---
 
 ## Usage
 
+> **Note:** Replace `uv run python` with just `python` if using pip.
+
 ### Fetch Data & Generate Report (Recommended)
 
 ```bash
 uv run python zerodha_history.py --fetch
+# or with pip: python zerodha_history.py --fetch
 ```
 
 This will:
