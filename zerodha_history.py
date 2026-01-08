@@ -13,6 +13,7 @@ import requests
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import markdown
 
 # Benchmark indices configuration
 # Yahoo Finance tickers for Indian and global indices
@@ -1943,6 +1944,203 @@ def generate_report(data, user_id, benchmarks_data=None):
     return "\n".join(report)
 
 
+def convert_md_to_html(md_content, title="Zerodha Account History"):
+    """Convert markdown report to styled HTML."""
+    # Convert markdown to HTML
+    html_body = markdown.markdown(
+        md_content,
+        extensions=['tables', 'toc', 'fenced_code']
+    )
+
+    # HTML template with nice CSS styling
+    html_template = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title} - Zerodha History Report</title>
+    <style>
+        :root {{
+            --primary: #387ed1;
+            --success: #28a745;
+            --danger: #dc3545;
+            --bg: #f8f9fa;
+            --card-bg: #ffffff;
+            --text: #212529;
+            --text-muted: #6c757d;
+            --border: #dee2e6;
+        }}
+
+        * {{
+            box-sizing: border-box;
+        }}
+
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--bg);
+            margin: 0;
+            padding: 20px;
+        }}
+
+        .container {{
+            max-width: 1200px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }}
+
+        h1 {{
+            color: var(--primary);
+            border-bottom: 3px solid var(--primary);
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+        }}
+
+        h2 {{
+            color: var(--text);
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+        }}
+
+        h3 {{
+            color: var(--text-muted);
+            margin-top: 25px;
+        }}
+
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 14px;
+        }}
+
+        th, td {{
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }}
+
+        th {{
+            background: var(--bg);
+            font-weight: 600;
+            color: var(--text);
+        }}
+
+        tr:hover {{
+            background: #f1f3f4;
+        }}
+
+        td:last-child, th:last-child {{
+            text-align: right;
+        }}
+
+        /* Highlight positive/negative values */
+        td {{
+            font-variant-numeric: tabular-nums;
+        }}
+
+        strong {{
+            color: var(--primary);
+        }}
+
+        /* Table of contents */
+        ul {{
+            background: var(--bg);
+            padding: 20px 40px;
+            border-radius: 8px;
+        }}
+
+        li {{
+            margin: 8px 0;
+        }}
+
+        a {{
+            color: var(--primary);
+            text-decoration: none;
+        }}
+
+        a:hover {{
+            text-decoration: underline;
+        }}
+
+        p {{
+            margin: 15px 0;
+        }}
+
+        em {{
+            color: var(--text-muted);
+        }}
+
+        code {{
+            background: var(--bg);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }}
+
+        hr {{
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 30px 0;
+        }}
+
+        /* Print styles */
+        @media print {{
+            body {{
+                background: white;
+                padding: 0;
+            }}
+            .container {{
+                box-shadow: none;
+                padding: 20px;
+            }}
+        }}
+
+        /* Responsive */
+        @media (max-width: 768px) {{
+            body {{
+                padding: 10px;
+            }}
+            .container {{
+                padding: 20px;
+            }}
+            table {{
+                font-size: 12px;
+            }}
+            th, td {{
+                padding: 8px 10px;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        {html_body}
+    </div>
+    <script>
+        // Highlight positive/negative percentages
+        document.querySelectorAll('td').forEach(td => {{
+            const text = td.textContent;
+            if (text.match(/^\\+[\\d.]+%/) || text.match(/^\\*\\*\\+[\\d.]+%/)) {{
+                td.style.color = '#28a745';
+                td.style.fontWeight = '600';
+            }} else if (text.match(/^-[\\d.]+%/) || text.match(/^\\*\\*-[\\d.]+%/)) {{
+                td.style.color = '#dc3545';
+                td.style.fontWeight = '600';
+            }}
+        }});
+    </script>
+</body>
+</html>'''
+
+    return html_template
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate Zerodha account history report")
     parser.add_argument("-u", "--user", help="User ID (data stored in tmp/<user>/). Auto-detected when using --fetch")
@@ -2008,7 +2206,16 @@ def main():
     with open(args.output, 'w') as f:
         f.write(report)
 
-    print(f"\nDone! Report saved to {args.output}")
+    # Generate HTML version
+    html_output = args.output.replace('.md', '.html')
+    print(f"Writing HTML report to {html_output}...")
+    html_content = convert_md_to_html(report, user_name)
+    with open(html_output, 'w') as f:
+        f.write(html_content)
+
+    print(f"\nDone! Reports saved to:")
+    print(f"  Markdown: {args.output}")
+    print(f"  HTML: {html_output}")
 
 
 if __name__ == "__main__":
